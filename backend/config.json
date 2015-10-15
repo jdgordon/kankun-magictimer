@@ -1,0 +1,23 @@
+[
+    {
+        "addr": "00:15:61:ee:bb:d2",
+        "nickname": "Donkey",
+        "schedule": {
+            "Sun": [ {"1600": "ON"}, {"1800": "OFF"} ]
+        }
+    },
+    {
+        "addr": "00:15:61:cc:85:e6",
+        "nickname": "Frog",
+        "schedule": {
+            "Sun": [ {"1600": "ON"}, {"1800": "OFF"} ]
+        }
+    },
+    {
+        "addr": "00:15:61:cc:81:71",
+        "nickname": "Llama",
+        "schedule": {
+            "Fri": [ {"1830": "ON"}, {"2000": "OFF"} ]
+        }
+    }
+]
