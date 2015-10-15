@@ -31,15 +31,10 @@ class TimerConfig:
     MODE_MANUAL_OFF = 2
     MODE_COUNT = 3
 
-    def __init__(self, nickname, config = None):
-        self.config = config
+    def __init__(self, nickname, schedule = None):
+        self.schedule = schedule
         self.nickname = nickname
         self.mode = TimerConfig.MODE_AUTO
-
-    def get_config(self, day):
-        if day in self.config:
-            return self.config[day]
-        return []
     
     def do_button(self):
         self.mode = (self.mode + 1) % TimerConfig.MODE_COUNT
@@ -59,8 +54,8 @@ class TimerConfig:
 
     def get_transition_list(self):
         for d in VALID_DAYS:
-            if d in self.config:
-                for t,s in self.config[d]:
+            if d in self.schedule:
+                for t,s in self.schedule[d]:
                     yield (d,t,s)
     
     def get_transitions_from_current(self):
@@ -95,7 +90,7 @@ def load_from_dict(cfg):
 		for day, items in x["schedule"].iteritems():
 			if day not in VALID_DAYS:
 				continue
-			schedule[str(day)] = [load_schedule_array(x) for x in items]
+			schedule[day] = [load_schedule_array(x) for x in items]
 		config[addr] = TimerConfig(nick, schedule)
 	
 	return config
