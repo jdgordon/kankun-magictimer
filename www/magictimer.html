@@ -1,0 +1,18 @@
+<html>
+<body>
+<pre>Timer <b>${TIMER_NICKNAME}</b> is currently <b>${CURRENT_STATE}</b></pre>
+
+<pre>${NEXT_STATE_CHANGE_TEXT}</pre>
+
+<form method="POST" action="/api/0.1/config">
+	<input type="hidden" name="addr" value="00:15:61:ee:bb:d2">
+	<input type="radio" name="force" value="on" ${CHECK_ON_RADIO}>Force ON
+	<br>
+	<input type="radio" name="force" value="off" ${CHECK_OFF_RADIO}>Force OFF
+	<br>
+	<input type="radio" name="force" value="none" ${CHECK_TIMER_RADIO}>Use timer
+	<br>
+	<input type="submit" value="Update">
+</form>
+</body>
+</html>
