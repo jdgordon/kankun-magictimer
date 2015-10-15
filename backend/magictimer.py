@@ -67,13 +67,13 @@ class TimerConfig:
 		current_day_idx = days.index(current_day)
 		# Need to get the full list of transitions in a single array
 		all_changes = list(self.get_transition_list())
-		current_idx = 0
+		current_idx = None
 		for i in range(len(all_changes)):
 			day, time, state = all_changes[i]
 			if (days.index(day) < current_day_idx) or \
 				((days.index(day) == current_day_idx) and int(time, base=10) <= current_time):
 				current_idx = i
-		if current_idx == 0 and len(all_changes) > 1:
+		if not current_idx and len(all_changes) > 1:
 			current_idx = len(all_changes) - 1
 			
 		return cycle(all_changes[current_idx:] + all_changes[:current_idx])
