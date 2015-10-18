@@ -46,7 +46,6 @@ class TimerConfig:
     
     def get_powered(self):
         if self.mode == TimerConfig.MODE_AUTO:
-            current_state = OFF
             day, time, current_state = self.get_transitions_from_current().next()
             return {ON:'ON', OFF:'OFF'}[current_state]
         else:
@@ -59,6 +58,13 @@ class TimerConfig:
                     yield (d,t,s)
     
     def get_transitions_from_current(self):
+        def cycle_with_default_generator(items):
+            # This is used to make sure the first item is always valid
+            # Even if the configured list hasnt tsarted yet.
+            yield (u'Sun', '0000', OFF)
+            x = cycle(items)
+            while True:
+                yield x.next()
         if self.mode != TimerConfig.MODE_AUTO:
             return None
         current_day, current_time = get_clocks()
@@ -71,29 +77,30 @@ class TimerConfig:
             if (VALID_DAYS.index(day) < current_day_idx) or \
                 ((VALID_DAYS.index(day) == current_day_idx) and int(time, base=10) <= current_time):
                 current_idx = i
-        if not current_idx and len(all_changes) > 1:
-            current_idx = len(all_changes) - 1
-            
+
+        if current_idx == None and len(all_changes) > 1:
+            return cycle_with_default_generator(all_changes)
+
         return cycle(all_changes[current_idx:] + all_changes[:current_idx])
             
     def get_next_transitions(self, amount=2):
         return list(islice(self.get_transitions_from_current(), 1, amount + 1))
 
 def load_from_dict(cfg):
-	def load_schedule_array(schedule):
-		return (str(schedule.keys()[0]), {u'ON': ON, u'OFF': OFF}[schedule.values()[0]])
-	config = {}
-	for x in cfg:
-		addr = x["addr"]
-		nick = x["nickname"]
-		schedule = {}
-		for day, items in x["schedule"].iteritems():
-			if day not in VALID_DAYS:
-				continue
-			schedule[day] = [load_schedule_array(x) for x in items]
-		config[addr] = TimerConfig(nick, schedule)
-	
-	return config
+    def load_schedule_array(schedule):
+        return (str(schedule.keys()[0]), {u'ON': ON, u'OFF': OFF}[schedule.values()[0]])
+    config = {}
+    for x in cfg:
+        addr = x["addr"]
+        nick = x["nickname"]
+        schedule = {}
+        for day, items in x["schedule"].iteritems():
+            if day not in VALID_DAYS:
+                continue
+            schedule[day] = [load_schedule_array(x) for x in items]
+        config[addr] = TimerConfig(nick, schedule)
+    
+    return config
 
 __config = None
 
@@ -244,6 +251,7 @@ if __name__ == "__main__":
     with open('config.json', 'r') as fh:
         jscfg = json.load(fh)
         __config = load_from_dict(jscfg)
+
     # Create the server, binding to localhost on port 9999
     server = BaseHTTPServer.HTTPServer((HOST, PORT), TimerHttpServer)
 
