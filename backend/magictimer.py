@@ -60,8 +60,8 @@ class TimerConfig:
     def get_transitions_from_current(self):
         def cycle_with_default_generator(items):
             # This is used to make sure the first item is always valid
-            # Even if the configured list hasnt tsarted yet.
-            yield (u'Sun', '0000', OFF)
+            # Even if the configured list hasnt started yet
+            yield (u'Sun', '0000', [ON, OFF][items[0][2]])
             x = cycle(items)
             while True:
                 yield x.next()
