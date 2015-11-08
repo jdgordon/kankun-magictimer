@@ -3,7 +3,7 @@ import cgi
 import sys
 import SocketServer
 import BaseHTTPServer
-from itertools import cycle, islice
+from itertools import cycle, islice, chain
 from StringIO import StringIO
 from string import Template
 import datetime
@@ -17,26 +17,39 @@ ON = 1
 VALID_DAYS = list(calendar.day_abbr)
 
 class SunTimeDiff(object):
-    def __init__(self):
-        pass
+    def __init__(self, config_str):
+        x = config_str.split()
+        assert len(x) == 3 and x[0].lower() in ['$sunset', '$sunrise'] \
+            and x[1] in ['+', '-']
 
-def get_suntimes(location_dict):
+        self.sunstate = x[0].lower()
+        op = x[1]
+        mins = x[2]
+        self.timediff = datetime.timedelta(minutes=int(op + mins))
+
+__suntimes_cache = {}
+def get_suntimes(day):
+    global __suntimes_cache
+    if day in __suntimes_cache:
+        return __suntimes_cache[day]
+
+    location_dict = __config["location"]
+
     tm = time.localtime()
-    date_str = '%d-%02d-%02d' % (tm.tm_year, tm.tm_mon, tm.tm_mday)
-    #url = 'http://api.sunrise-sunset.org/json?lat=%s&lng=%s&date=%s' % \
-    #    (location_dict["lat"], location_dict["long"], date_str)
-    #request = Request(url)
-    response = """{"results":{"sunrise":"7:05:48 PM","sunset":"9:01:58 AM","solar_noon":"2:03:53 AM","day_length":"13:56:10","civil_twilight_begin":"6:37:14 PM","civil_twilight_end":"9:30:32 AM","nautical_twilight_begin":"6:02:23 PM","nautical_twilight_end":"10:05:24 AM","astronomical_twilight_begin":"5:24:57 PM","astronomical_twilight_end":"10:42:49 AM"},"status":"OK"}"""
-    #response = urlopen(request)
-    #time_dict = json.loads(response.read())
-    time_dict = json.loads(response)
+    date_str = '%d-%02d-%02d' % (day.year, day.month, day.day)
+    url = 'http://api.sunrise-sunset.org/json?lat=%s&lng=%s&date=%s' % \
+        (location_dict["lat"], location_dict["long"], date_str)
+    request = Request(url)
+    response = urlopen(request)
+    time_dict = json.loads(response.read())
     if time_dict["status"] != "OK":
         return None
     times = {}
     for x in ["sunset", "sunrise"]:
         utc_time = time.strptime(date_str + " " + time_dict["results"][x], "%Y-%m-%d %I:%M:%S %p")
-        times[x] = calendar.timegm(utc_time)
-
+        times["$" + x] = calendar.timegm(utc_time)
+    __suntimes_cache[day] = times
+    return times
 
 class TimerConfig:
     MODE_AUTO = 0
@@ -69,10 +82,13 @@ class TimerConfig:
             Returns a generator of tuples in the form:
             ( datetime.datetime object, ON/OFF)
         """
-        def get_item_key(obj):
-            if (isinstance(obj, SunTimeDiff)):
-                raise TypeError() # todo: handle this
-            return obj[0]
+        def get_item_key(obj_list):
+            key = obj_list[0]
+            if (isinstance(key, SunTimeDiff)):
+                suntimes = get_suntimes(start_day)
+                dt = datetime.datetime.fromtimestamp(suntimes[key.sunstate]) + key.timediff
+                return "%02d%02d" % (dt.hour, dt.minute)
+            return key
 
         timediff = datetime.timedelta(days=1)
         start_day = datetime.date.today()
@@ -88,8 +104,9 @@ class TimerConfig:
             d = calendar.day_abbr[start_day.weekday()]
             if d in self.schedule:
                 for t,s in sorted(self.schedule[d], key=get_item_key):
-                    hr = int(t[0:2], base=10)
-                    mins = int(t[2:], base=10)
+                    real_time = get_item_key((t,)) # fixme, put the datetime obj instead of the string
+                    hr = int(real_time[0:2], base=10)
+                    mins = int(real_time[2:], base=10)
                     yield (datetime.datetime.combine(start_day, datetime.time(hr, mins)), s)
             start_day += timediff
     
@@ -109,7 +126,12 @@ class TimerConfig:
 
 def load_from_dict(cfg):
     def load_schedule_array(schedule):
-        return (str(schedule.keys()[0]), {u'ON': ON, u'OFF': OFF}[schedule.values()[0]])
+        for k, v in schedule.iteritems():
+            state = {u'ON': ON, u'OFF': OFF}[v]
+            if k.split()[0] in ['$sunset', '$sunrise']:
+                yield (SunTimeDiff(k), state)
+            else:
+                yield (k, state)
     timers = {}
     for x in cfg["timers"]:
         addr = x["addr"]
@@ -118,7 +140,9 @@ def load_from_dict(cfg):
         for day, items in x["schedule"].iteritems():
             if day not in VALID_DAYS:
                 continue
-            schedule[day] = [load_schedule_array(x) for x in items]
+            schedule[day] = []
+            for j in items:
+                schedule[day] += list(load_schedule_array(j))
         timers[addr] = TimerConfig(nick, schedule)
     
     return {"timers": timers, "location": cfg["location"]}
@@ -268,7 +292,8 @@ if __name__ == "__main__":
         jscfg = json.load(fh)
         __config = load_from_dict(jscfg)
 
-    test = get_config("00:15:61:ee:bb:d2")
+    test = get_config("00:15:61:cc:85:e6")
+    test.get_next_transitions()
     # Create the server, binding to localhost on port 9999
     server = BaseHTTPServer.HTTPServer((HOST, PORT), TimerHttpServer)
 
