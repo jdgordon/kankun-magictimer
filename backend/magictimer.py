@@ -9,22 +9,35 @@ from string import Template
 import datetime
 import time
 import json
+import calendar
 from urllib2 import urlopen, Request
 
 OFF = 0
 ON = 1
-VALID_DAYS = [u'Sun', u'Mon', u'Tue', u'Wed', u'Thu', u'Fri', u'Sat']
+VALID_DAYS = list(calendar.day_abbr)
 
-"""
-def get_suntimes():
+class SunTimeDiff(object):
+    def __init__(self):
+        pass
+
+def get_suntimes(location_dict):
     tm = time.localtime()
-    request = Request('http://new.earthtools.org/sun/-37.8/144.96/%d/%d/10/%d' % (tm.tm_mday, tm.tm_mon, tm.tm_isdst))
-    response = urlopen(request)
-    timestring = response.read()
-    print timestring
-    
-get_suntimes()
-"""
+    date_str = '%d-%02d-%02d' % (tm.tm_year, tm.tm_mon, tm.tm_mday)
+    #url = 'http://api.sunrise-sunset.org/json?lat=%s&lng=%s&date=%s' % \
+    #    (location_dict["lat"], location_dict["long"], date_str)
+    #request = Request(url)
+    response = """{"results":{"sunrise":"7:05:48 PM","sunset":"9:01:58 AM","solar_noon":"2:03:53 AM","day_length":"13:56:10","civil_twilight_begin":"6:37:14 PM","civil_twilight_end":"9:30:32 AM","nautical_twilight_begin":"6:02:23 PM","nautical_twilight_end":"10:05:24 AM","astronomical_twilight_begin":"5:24:57 PM","astronomical_twilight_end":"10:42:49 AM"},"status":"OK"}"""
+    #response = urlopen(request)
+    #time_dict = json.loads(response.read())
+    time_dict = json.loads(response)
+    if time_dict["status"] != "OK":
+        return None
+    times = {}
+    for x in ["sunset", "sunrise"]:
+        utc_time = time.strptime(date_str + " " + time_dict["results"][x], "%Y-%m-%d %I:%M:%S %p")
+        times[x] = calendar.timegm(utc_time)
+
+
 class TimerConfig:
     MODE_AUTO = 0
     MODE_MANUAL_ON = 1
@@ -46,51 +59,59 @@ class TimerConfig:
     
     def get_powered(self):
         if self.mode == TimerConfig.MODE_AUTO:
-            day, time, current_state = self.get_transitions_from_current().next()
+            time, current_state = self.get_transitions_from_current().next()
             return {ON:'ON', OFF:'OFF'}[current_state]
         else:
             return {TimerConfig.MODE_MANUAL_OFF:"OFF", TimerConfig.MODE_MANUAL_ON:"ON"}[self.mode]
 
     def get_transition_list(self):
-        for d in VALID_DAYS:
+        """
+            Returns a generator of tuples in the form:
+            ( datetime.datetime object, ON/OFF)
+        """
+        def get_item_key(obj):
+            if (isinstance(obj, SunTimeDiff)):
+                raise TypeError() # todo: handle this
+            return obj[0]
+
+        timediff = datetime.timedelta(days=1)
+        start_day = datetime.date.today()
+        # This first needs to find the first day >= "today" that exists in the schedule
+        for d in list(islice(cycle(calendar.day_abbr), start_day.weekday(), start_day.weekday() + 7)):
+            if d in self.schedule and len(self.schedule[d]) > 0:
+                dt = datetime.datetime.combine(datetime.date.today(), datetime.time.min)
+                first = sorted(self.schedule[d], key=get_item_key)[0]
+                yield (dt, [ON, OFF][first[1]])
+                break
+            start_day += timediff
+        while True:
+            d = calendar.day_abbr[start_day.weekday()]
             if d in self.schedule:
-                for t,s in self.schedule[d]:
-                    yield (d,t,s)
+                for t,s in sorted(self.schedule[d], key=get_item_key):
+                    hr = int(t[0:2], base=10)
+                    mins = int(t[2:], base=10)
+                    yield (datetime.datetime.combine(start_day, datetime.time(hr, mins)), s)
+            start_day += timediff
     
     def get_transitions_from_current(self):
-        def cycle_with_default_generator(items):
-            # This is used to make sure the first item is always valid
-            # Even if the configured list hasnt started yet
-            yield (u'Sun', '0000', [ON, OFF][items[0][2]])
-            x = cycle(items)
-            while True:
-                yield x.next()
+        """Returns a generator with the first being the current state"""
         if self.mode != TimerConfig.MODE_AUTO:
             return None
-        current_day, current_time = get_clocks()
-        current_day_idx = VALID_DAYS.index(current_day)
-        # Need to get the full list of transitions in a single array
-        all_changes = list(self.get_transition_list())
-        current_idx = None
-        for i in range(len(all_changes)):
-            day, time, state = all_changes[i]
-            if (VALID_DAYS.index(day) < current_day_idx) or \
-                ((VALID_DAYS.index(day) == current_day_idx) and int(time, base=10) <= current_time):
-                current_idx = i
-
-        if current_idx == None and len(all_changes) > 1:
-            return cycle_with_default_generator(all_changes)
-
-        return cycle(all_changes[current_idx:] + all_changes[:current_idx])
+        transitions = self.get_transition_list()
+        idx = 0
+        now = datetime.datetime.now()
+        while now > transitions.next()[0]:
+            idx += 1
+        return islice(self.get_transition_list(), idx - 1, None)
             
     def get_next_transitions(self, amount=2):
-        return list(islice(self.get_transitions_from_current(), 1, amount + 1))
+        return list(islice(self.get_transitions_from_current(), 1, 1 + amount))
 
 def load_from_dict(cfg):
     def load_schedule_array(schedule):
         return (str(schedule.keys()[0]), {u'ON': ON, u'OFF': OFF}[schedule.values()[0]])
-    config = {}
-    for x in cfg:
+    timers = {}
+    for x in cfg["timers"]:
         addr = x["addr"]
         nick = x["nickname"]
         schedule = {}
@@ -98,16 +119,16 @@ def load_from_dict(cfg):
             if day not in VALID_DAYS:
                 continue
             schedule[day] = [load_schedule_array(x) for x in items]
-        config[addr] = TimerConfig(nick, schedule)
+        timers[addr] = TimerConfig(nick, schedule)
     
-    return config
+    return {"timers": timers, "location": cfg["location"]}
 
 __config = None
 
 def handle_get_state(timer_addr):
-    if timer_addr not in __config:
+    if timer_addr not in __config["timers"]:
         return None
-    config = __config[timer_addr]
+    config = __config["timers"][timer_addr]
     
     power_str = config.get_powered()
     mode_str = config.get_mode()
@@ -115,26 +136,21 @@ def handle_get_state(timer_addr):
     return "power=%s timer=%s" % (power_str, mode_str)
 
 def handle_do_button(timer_addr):
-    if timer_addr not in __config:
+    if timer_addr not in __config["timers"]:
         return None
-    config = __config[timer_addr]
+    config = __config["timers"][timer_addr]
     config.do_button()
     return handle_get_state(timer_addr)
 
-def get_clocks():
-    tm = time.localtime()
-    current_time = int("%02d%02d" % (tm.tm_hour, tm.tm_min), base=10)
-    today_str = datetime.datetime.now().strftime("%a")
-    return (today_str, current_time)
-
 def get_next_change_text(timer_addr):
-    if timer_addr not in __config:
+    if timer_addr not in __config["timers"]:
         return ""
-    d, t, s = __config[timer_addr].get_next_transitions()[0]
+    time, s = __config["timers"][timer_addr].get_next_transitions()[0]
     state = {ON:'ON', OFF:'OFF'}[s]
-    hr = t[0:2]
-    mins = t[2:]
-    if d != get_clocks()[0]:
+    hr = time.hour
+    mins = time.minute
+    d = calendar.day_abbr[time.weekday()]
+    if time.weekday() != datetime.date.today().weekday():
         day_suffix = " on %s" % (d)
     else:
         day_suffix = ""
@@ -142,8 +158,8 @@ def get_next_change_text(timer_addr):
     
 
 def get_config(name):
-    if name in __config.keys():
-        return __config[name]
+    if name in __config["timers"].keys():
+        return __config["timers"][name]
     return None
 
 def get_html(addr):
@@ -152,7 +168,7 @@ def get_html(addr):
         temp = Template(html)
         cfg = get_config(addr)
         if cfg == None:
-            for k,v in __config.iteritems():
+            for k,v in __config["timers"].iteritems():
                 if v.nickname.lower() == addr.lower():
                     cfg = v
                     addr = k
@@ -252,6 +268,7 @@ if __name__ == "__main__":
         jscfg = json.load(fh)
         __config = load_from_dict(jscfg)
 
+    test = get_config("00:15:61:ee:bb:d2")
     # Create the server, binding to localhost on port 9999
     server = BaseHTTPServer.HTTPServer((HOST, PORT), TimerHttpServer)
 
