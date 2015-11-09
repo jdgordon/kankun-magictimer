@@ -26,3 +26,8 @@ In kk-sp3/root/light.sh and do_button.sh you need to change the server that is r
 On the machine youll be using as the server run "python /path/to/magictimer.py <port number>&" so it stays running in the background.
 
 PULL REQUESTS WELCOME ESPECIALY FOR A FRONTEND
+
+# TODO
+* switch to a database instead of JSON config
+* probably switch to django or some other proper server framework
+* a frontend!
