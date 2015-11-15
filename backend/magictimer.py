@@ -11,9 +11,32 @@ import time
 import json
 import calendar
 from urllib2 import urlopen, Request
+from collections import namedtuple
 
-OFF = 0
-ON = 1
+
+class State:
+    off, on = range(2)
+    def __init__(self, val):
+        if isinstance(val, unicode) or isinstance(val, str):
+            self._val = {u'OFF': self.off , u'ON': self.on}[val]
+        else:
+            self._val = val
+    @property
+    def name(self):
+        return [u'OFF', u'ON'][self._val]
+    
+    @property
+    def value(self):
+        return self._val
+    
+    def __invert__(self):
+        if self._val == self.off:
+            return State(self.on)
+        return State(self.off)
+    
+    def __repr__(self):
+        return "%s:(%d/%s)" % (self.__class__.__name__, self._val, self.name)
+
 VALID_DAYS = list(calendar.day_abbr)
 
 class SunTimeDiff(object):
@@ -51,6 +74,8 @@ def get_suntimes(day):
     __suntimes_cache[day] = times
     return times
 
+TransitionInfo = namedtuple('TransitionInfo', ['datetime', 'state'])
+
 class TimerConfig:
     MODE_AUTO = 0
     MODE_MANUAL_ON = 1
@@ -73,7 +98,7 @@ class TimerConfig:
     def get_powered(self):
         if self.mode == TimerConfig.MODE_AUTO:
             time, current_state = self.get_transitions_from_current().next()
-            return {ON:'ON', OFF:'OFF'}[current_state]
+            return current_state.name
         else:
             return {TimerConfig.MODE_MANUAL_OFF:"OFF", TimerConfig.MODE_MANUAL_ON:"ON"}[self.mode]
 
@@ -83,7 +108,7 @@ class TimerConfig:
             ( datetime.datetime object, ON/OFF)
         """
         def get_item_key(obj_list):
-            key = obj_list[0]
+            key = obj_list.datetime
             if (isinstance(key, SunTimeDiff)):
                 suntimes = get_suntimes(start_day)
                 dt = datetime.datetime.fromtimestamp(suntimes[key.sunstate]) + key.timediff
@@ -97,17 +122,17 @@ class TimerConfig:
             if d in self.schedule and len(self.schedule[d]) > 0:
                 dt = datetime.datetime.combine(datetime.date.today(), datetime.time.min)
                 first = sorted(self.schedule[d], key=get_item_key)[0]
-                yield (dt, [ON, OFF][first[1]])
+                yield TransitionInfo(dt, ~first[1])
                 break
             start_day += timediff
         while True:
             d = calendar.day_abbr[start_day.weekday()]
             if d in self.schedule:
                 for t,s in sorted(self.schedule[d], key=get_item_key):
-                    real_time = get_item_key((t,)) # fixme, put the datetime obj instead of the string
+                    real_time = get_item_key(TransitionInfo(t, State("ON"))) # fixme, put the datetime obj instead of the string
                     hr = int(real_time[0:2], base=10)
                     mins = int(real_time[2:], base=10)
-                    yield (datetime.datetime.combine(start_day, datetime.time(hr, mins)), s)
+                    yield TransitionInfo(datetime.datetime.combine(start_day, datetime.time(hr, mins)), s)
             start_day += timediff
     
     def get_transitions_from_current(self):
@@ -127,11 +152,11 @@ class TimerConfig:
 def load_from_dict(cfg):
     def load_schedule_array(schedule):
         for k, v in schedule.iteritems():
-            state = {u'ON': ON, u'OFF': OFF}[v]
+            state = State(v)
             if k.split()[0] in ['$sunset', '$sunrise']:
-                yield (SunTimeDiff(k), state)
+                yield TransitionInfo(SunTimeDiff(k), state)
             else:
-                yield (k, state)
+                yield TransitionInfo(k, state)
     timers = {}
     for x in cfg["timers"]:
         addr = x["addr"]
@@ -144,7 +169,7 @@ def load_from_dict(cfg):
             for j in items:
                 schedule[day] += list(load_schedule_array(j))
         timers[addr] = TimerConfig(nick, schedule)
-    
+
     return {"timers": timers, "location": cfg["location"]}
 
 __config = None
@@ -170,7 +195,7 @@ def get_next_change_text(timer_addr):
     if timer_addr not in __config["timers"]:
         return ""
     time, s = __config["timers"][timer_addr].get_next_transitions()[0]
-    state = {ON:'ON', OFF:'OFF'}[s]
+    state = s.name
     hr = time.hour
     mins = time.minute
     d = calendar.day_abbr[time.weekday()]
@@ -292,8 +317,8 @@ if __name__ == "__main__":
         jscfg = json.load(fh)
         __config = load_from_dict(jscfg)
 
-    test = get_config("00:15:61:cc:85:e6")
-    test.get_next_transitions()
+    #test = get_config("00:15:61:cc:85:e6")
+    #print test.get_next_transitions()
     # Create the server, binding to localhost on port 9999
     server = BaseHTTPServer.HTTPServer((HOST, PORT), TimerHttpServer)
 
