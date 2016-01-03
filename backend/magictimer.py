@@ -13,7 +13,7 @@ import calendar
 from urllib2 import urlopen, Request
 from collections import namedtuple
 
-from flask import Flask, request
+from flask import Flask, request, render_template
 app = Flask(__name__)
 
 class State:
@@ -108,6 +108,13 @@ class TimerConfig:
         else:
             return {TimerConfig.MODE_MANUAL_OFF:"OFF", TimerConfig.MODE_MANUAL_ON:"ON"}[self.mode]
 
+    def get_radioselect_text(self, mode):
+        modes = {'on': TimerConfig.MODE_MANUAL_ON, 'off': TimerConfig.MODE_MANUAL_OFF, 'auto':TimerConfig.MODE_AUTO}
+        for k, v in modes.iteritems():
+            if mode == k and self.mode == v:
+                return "checked"
+        return ""
+
     def get_transition_list(self):
         """
             Returns a generator of tuples in the form:
@@ -154,6 +161,20 @@ class TimerConfig:
             
     def get_next_transitions(self, amount=2):
         return list(islice(self.get_transitions_from_current(), 1, 1 + amount))
+        
+    def get_next_change_text(self):
+        if self.mode != TimerConfig.MODE_AUTO:
+            return "Timer is forced to %s, change setting below" % (self.get_powered())
+        time, s = self.get_next_transitions()[0]
+        state = s.name
+        hr = time.hour
+        mins = time.minute
+        d = calendar.day_abbr[time.weekday()]
+        if time.weekday() != datetime.date.today().weekday():
+            day_suffix = " on %s" % (d)
+        else:
+            day_suffix = ""
+        return "Timer will turn %s at %s:%s%s" % (state, hr, mins, day_suffix)
 
 def load_from_dict(cfg):
     def load_schedule_array(schedule):
@@ -223,105 +244,32 @@ def find_config_from_nick(name):
     for k,v in __config["timers"].iteritems():
         if v.nickname.lower() == name.lower():
             return (v,k)
+    return (None, None)
 
 @app.route('/<addr>', methods=['GET', 'POST'])
-def get_html(addr):
+def get_one_html(addr):
     cfg = get_config(addr)
-    print cfg
     if not cfg:
         cfg, addr = find_config_from_nick(addr)
     if not cfg:
         return None
     if request.method == 'POST':
         cfg.set_mode(request.form.get('force'))
-    with open('../www/magictimer.html', 'r') as fh:
-        html = fh.read()
-        temp = Template(html)
+
+    return render_template('index.html', timers={addr: cfg})
+
+@app.route('/', methods=['GET', 'POST'])
+def get_html():
+    if request.method == 'POST':
+        addr = request.form.get('addr')
+        cfg = get_config(addr)
         if not cfg:
-            return ""
-        current = cfg.get_powered()
-        next_text = ""
-        mode = cfg.mode
-        if mode == TimerConfig.MODE_AUTO:
-            checks = {"on":"", "off":"", "timer":"checked"}
-            next_text = get_next_change_text(addr)
-        elif mode == TimerConfig.MODE_MANUAL_ON:
-            checks = {"on":"checked", "off":"", "timer":""}
-            next_text = "Timer is forced to ON, change setting below"
-        else:
-            checks = {"on":"", "off":"checked", "timer":""}
-            next_text = "Timer is forced to OFF, change setting below"
-        reply = temp.substitute(TIMER_NICKNAME=cfg.nickname,
-                CURRENT_STATE=current, NEXT_STATE_CHANGE_TEXT=next_text,
-                CHECK_ON_RADIO=checks["on"],CHECK_OFF_RADIO=checks["off"],CHECK_TIMER_RADIO=checks["timer"], ADDR=addr)
-    return reply
-        
-        
-class TimerHttpServer(BaseHTTPServer.BaseHTTPRequestHandler):
+            cfg, addr = find_config_from_nick(addr)
+        if not cfg:
+            return None
+        cfg.set_mode(request.form.get('force'))
 
-    def do_POST(self):
-        ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
-        if ctype == 'multipart/form-data':
-            postvars = cgi.parse_multipart(self.rfile, pdict)
-        elif ctype == 'application/x-www-form-urlencoded':
-            length = int(self.headers.getheader('content-length'))
-            postvars = cgi.parse_qs(self.rfile.read(length), keep_blank_values=1)
-        else:
-            postvars = {}
-        status = 500
-        reply = ""
-        args = self.path[1:].split("/")
-        if len(args) < 3:
-            status = 400
-        elif args[0] != "api" or args[1] != "0.1":
-            status = 400
-        else:
-            if args[2] == 'config' and "addr" in postvars:
-                cfg = get_config(postvars["addr"][0])
-                if cfg and "force" in postvars:
-                    cfg.mode = {"none":TimerConfig.MODE_AUTO,
-                                "on":TimerConfig.MODE_MANUAL_ON, 
-                                "off":TimerConfig.MODE_MANUAL_OFF
-                            }[postvars["force"][0].lower()]
-                if cfg and "nickname" in postvars:
-                    cfg.nickname = postvars["nickname"][0]
-                reply = get_html(postvars["addr"][0])
-                status = 200
-        self.send_response(status)
-        self.end_headers()
-        self.wfile.write(reply)
-    
-    def do_GET(self):
-        status = 500
-        reply = ""
-        args = self.path[1:].split("/")
-        content_type = "text/plain"
-
-        if len(args) == 1 and args[0] == '':
-            reply = get_html('00:15:61:ee:bb:d2')
-            content_type = "text/html"
-            status = 200
-        elif len(args) == 1:
-            reply = get_html(args[0])
-            content_type = "text/html"
-            status = 200
-        elif len(args) < 3:
-            status = 400
-        elif args[0] != "api" or args[1] != "0.1":
-            status = 400
-        else:
-            command = args[2]
-            if len(args) > 3 and args[3] == 'button':
-                result = handle_do_button(args[2])
-            result = handle_get_state(args[2])
-            if result:
-                status = 200
-                reply = result
-        self.send_response(status)
-        self.send_header("Content-type", content_type)
-        self.send_header("Content-Length", len(reply))
-        self.end_headers()
-        self.wfile.write(reply)
+    return render_template('index.html', timers=__config["timers"])
 
 if __name__ == "__main__":
     with open('config.json', 'r') as fh:
@@ -331,25 +279,3 @@ if __name__ == "__main__":
         app.run(debug=True)
     else:
         app.run(host='0.0.0.0', port=8100)
-    """
-    HOST, PORT = "0.0.0.0", 8080
-    if len(sys.argv) > 1:
-         PORT = int(sys.argv[1])
-
-    with open('config.json', 'r') as fh:
-        jscfg = json.load(fh)
-        __config = load_from_dict(jscfg)
-
-    #test = get_config("00:15:61:cc:85:e6")
-    #print test.get_next_transitions()
-    # Create the server, binding to localhost on port 9999
-    server = BaseHTTPServer.HTTPServer((HOST, PORT), TimerHttpServer)
-
-    # Activate the server; this will keep running until you
-    # interrupt the program with Ctrl-C
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    server.server_close()
-    """
