@@ -13,6 +13,8 @@ import calendar
 from urllib2 import urlopen, Request
 from collections import namedtuple
 
+from flask import Flask, request
+app = Flask(__name__)
 
 class State:
     off, on = range(2)
@@ -90,6 +92,10 @@ class TimerConfig:
     def do_button(self):
         self.mode = (self.mode + 1) % TimerConfig.MODE_COUNT
     
+    def set_mode(self, mode):
+        self.mode = {"ON": TimerConfig.MODE_MANUAL_ON,
+                     "OFF": TimerConfig.MODE_MANUAL_OFF,
+                     "AUTO": TimerConfig.MODE_AUTO}[mode.upper()]
     def get_mode(self):
         if self.mode == TimerConfig.MODE_AUTO:
             return "AUTO"
@@ -174,6 +180,7 @@ def load_from_dict(cfg):
 
 __config = None
 
+@app.route('/api/0.1/<timer_addr>')
 def handle_get_state(timer_addr):
     if timer_addr not in __config["timers"]:
         return None
@@ -184,6 +191,7 @@ def handle_get_state(timer_addr):
     
     return "power=%s timer=%s" % (power_str, mode_str)
 
+@app.route('/api/0.1/<timer_addr>/button')
 def handle_do_button(timer_addr):
     if timer_addr not in __config["timers"]:
         return None
@@ -210,18 +218,25 @@ def get_config(name):
     if name in __config["timers"].keys():
         return __config["timers"][name]
     return None
+    
+def find_config_from_nick(name):
+    for k,v in __config["timers"].iteritems():
+        if v.nickname.lower() == name.lower():
+            return (v,k)
 
+@app.route('/<addr>', methods=['GET', 'POST'])
 def get_html(addr):
+    cfg = get_config(addr)
+    print cfg
+    if not cfg:
+        cfg, addr = find_config_from_nick(addr)
+    if not cfg:
+        return None
+    if request.method == 'POST':
+        cfg.set_mode(request.form.get('force'))
     with open('../www/magictimer.html', 'r') as fh:
         html = fh.read()
         temp = Template(html)
-        cfg = get_config(addr)
-        if cfg == None:
-            for k,v in __config["timers"].iteritems():
-                if v.nickname.lower() == addr.lower():
-                    cfg = v
-                    addr = k
-                    break
         if not cfg:
             return ""
         current = cfg.get_powered()
@@ -238,7 +253,7 @@ def get_html(addr):
             next_text = "Timer is forced to OFF, change setting below"
         reply = temp.substitute(TIMER_NICKNAME=cfg.nickname,
                 CURRENT_STATE=current, NEXT_STATE_CHANGE_TEXT=next_text,
-                CHECK_ON_RADIO=checks["on"],CHECK_OFF_RADIO=checks["off"],CHECK_TIMER_RADIO=checks["timer"])
+                CHECK_ON_RADIO=checks["on"],CHECK_OFF_RADIO=checks["off"],CHECK_TIMER_RADIO=checks["timer"], ADDR=addr)
     return reply
         
         
@@ -309,6 +324,14 @@ class TimerHttpServer(BaseHTTPServer.BaseHTTPRequestHandler):
         self.wfile.write(reply)
 
 if __name__ == "__main__":
+    with open('config.json', 'r') as fh:
+        jscfg = json.load(fh)
+        __config = load_from_dict(jscfg)
+    if len(sys.argv) > 1:
+        app.run(debug=True)
+    else:
+        app.run(host='0.0.0.0', port=8100)
+    """
     HOST, PORT = "0.0.0.0", 8080
     if len(sys.argv) > 1:
          PORT = int(sys.argv[1])
@@ -329,3 +352,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     server.server_close()
+    """
